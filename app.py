@@ -380,5 +380,7 @@ def clear_data():
     session.pop('sales_columns', None)
     return jsonify({'message': 'Data cleared successfully'})
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+if __name__ == "__main__":
+    import os
+    port = int(os.environ.get("FLASK_PORT", 5001))  # default to 5001
+    app.run(debug=True, port=port)
