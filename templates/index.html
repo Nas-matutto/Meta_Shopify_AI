@@ -366,6 +366,7 @@
                 <div style="text-align: center;">
                     <button id="upload-btn" class="upload-btn">Upload & Analyze</button>
                     <button id="clear-data-btn" class="clear-btn" style="display: none;">Clear Data</button>
+                    <button id="check-session-btn" class="clear-btn" style="background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); display: none;">Check Session</button>
                 </div>
                 
                 <div class="loading" id="upload-loading">
@@ -452,6 +453,7 @@ Ask me anything else about your data - I can analyze patterns, calculate metrics
         const chatSection = document.getElementById('chat-section');
         const clearDataBtn = document.getElementById('clear-data-btn');
         const quickAnalysisBtn = document.getElementById('quick-analysis-btn');
+        const checkSessionBtn = document.getElementById('check-session-btn');
 
         // Upload functionality
         uploadBtn.addEventListener('click', async () => {
@@ -490,6 +492,7 @@ Ask me anything else about your data - I can analyze patterns, calculate metrics
                 displayDataSummary(data);
                 chatSection.style.display = 'block';
                 clearDataBtn.style.display = 'inline-block';
+                checkSessionBtn.style.display = 'inline-block';
 
             } catch (error) {
                 console.error('Upload error:', error); // Debug log
@@ -588,6 +591,7 @@ Ask me anything else about your data - I can analyze patterns, calculate metrics
                 dataSummary.style.display = 'none';
                 chatSection.style.display = 'none';
                 clearDataBtn.style.display = 'none';
+                checkSessionBtn.style.display = 'none';
                 chatMessages.innerHTML = '';
                 metaFileInput.value = '';
                 salesFileInput.value = '';

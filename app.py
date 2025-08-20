@@ -4,7 +4,7 @@ import pandas as pd
 import json
 import os
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 import anthropic
 from werkzeug.utils import secure_filename
 import io
@@ -15,6 +15,7 @@ load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-change-this')  # Load from .env
+app.permanent_session_lifetime = timedelta(hours=2)  # Sessions last 2 hours
 CORS(app)
 
 # Configuration
@@ -36,13 +37,25 @@ try:
         print("Please set your API key in the .env file")
         client = None
     else:
-        # Add timeout and retry configuration
-        client = anthropic.Anthropic(
-            api_key=api_key,
-            timeout=60.0,  # 60 second timeout
-            max_retries=3   # Retry failed requests 3 times
-        )
-        print(f"Anthropic client initialized successfully with key: {api_key[:10]}...")
+        # Check if we're in a corporate environment with SSL issues
+        import ssl
+        import urllib3
+        
+        # For corporate networks with SSL inspection, we may need to handle certificates differently
+        try:
+            # Try normal connection first
+            client = anthropic.Anthropic(
+                api_key=api_key,
+                timeout=60.0,
+                max_retries=3
+            )
+            print(f"Anthropic client initialized successfully with key: {api_key[:10]}...")
+        except Exception as ssl_error:
+            print(f"SSL/Connection issue detected: {ssl_error}")
+            print("This appears to be a corporate network with SSL inspection.")
+            print("Please try connecting via mobile hotspot or personal VPN.")
+            client = None
+            
 except Exception as e:
     print(f"Error initializing Anthropic client: {e}")
     client = None
@@ -136,13 +149,18 @@ def upload_files():
         
         print("Data cleaned, converting to JSON...")  # Debug log
         
+        # Make session permanent to persist data
+        session.permanent = True
+        
         # Store data in session (for MVP - in production, use a database)
         session['meta_data'] = meta_df_clean.to_json(orient='records')
         session['sales_data'] = sales_df_clean.to_json(orient='records')
         session['meta_columns'] = list(meta_df.columns)
         session['sales_columns'] = list(sales_df.columns)
+        session['upload_timestamp'] = datetime.now().isoformat()
         
         print("Data stored in session successfully")  # Debug log
+        print(f"Session keys after upload: {list(session.keys())}")  # Debug log
         
         # Generate data summary for initial analysis
         meta_summary = {
@@ -186,20 +204,29 @@ def ask_question():
         question = data.get('question', '').strip()
         
         print(f"Question received: {question}")  # Debug log
+        print(f"Session keys: {list(session.keys())}")  # Debug log - see what's in session
         
         if not question:
             return jsonify({'error': 'Question is required'}), 400
         
-        # Check if data exists in session
-        if 'meta_data' not in session or 'sales_data' not in session:
-            return jsonify({'error': 'Please upload files first'}), 400
+        # Check if data exists in session with detailed logging
+        if 'meta_data' not in session:
+            print("META data not found in session")  # Debug log
+            return jsonify({'error': 'META Ads data not found. Please upload files first'}), 400
+            
+        if 'sales_data' not in session:
+            print("Sales data not found in session")  # Debug log
+            return jsonify({'error': 'Sales data not found. Please upload files first'}), 400
         
         # Reconstruct DataFrames from session
         print("Reconstructing DataFrames...")  # Debug log
-        meta_df = pd.read_json(session['meta_data'], orient='records')
-        sales_df = pd.read_json(session['sales_data'], orient='records')
-        
-        print(f"Data loaded - META: {len(meta_df)} rows, Sales: {len(sales_df)} rows")  # Debug log
+        try:
+            meta_df = pd.read_json(session['meta_data'], orient='records')
+            sales_df = pd.read_json(session['sales_data'], orient='records')
+            print(f"Data loaded successfully - META: {len(meta_df)} rows, Sales: {len(sales_df)} rows")  # Debug log
+        except Exception as e:
+            print(f"Error reconstructing DataFrames: {e}")  # Debug log
+            return jsonify({'error': 'Error reading uploaded data. Please re-upload your files.'}), 400
         
         # Prepare context for Claude (limit data size for API)
         meta_sample = meta_df.head(5).to_dict('records') if len(meta_df) > 5 else meta_df.to_dict('records')
@@ -380,7 +407,5 @@ def clear_data():
     session.pop('sales_columns', None)
     return jsonify({'message': 'Data cleared successfully'})
 
-if __name__ == "__main__":
-    import os
-    port = int(os.environ.get("FLASK_PORT", 5001))  # default to 5001
-    app.run(debug=True, port=port)
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)
