@@ -1,5 +1,4 @@
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONSfrom flask import Flask, request, jsonify, render_template, session
+from flask import Flask, request, jsonify, render_template, session
 from flask_cors import CORS
 import pandas as pd
 import json
@@ -12,18 +11,19 @@ import io
 from dotenv import load_dotenv
 import hashlib
 import pickle
+import traceback
 
 # Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-change-this')  # Load from .env
-app.permanent_session_lifetime = timedelta(hours=2)  # Sessions last 2 hours
+app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-change-this')
+app.permanent_session_lifetime = timedelta(hours=2)
 CORS(app)
 
 # Configuration
 UPLOAD_FOLDER = 'uploads'
-SESSION_DATA_FOLDER = 'session_data'  # New folder for session data
+SESSION_DATA_FOLDER = 'session_data'
 ALLOWED_EXTENSIONS = {'csv', 'xlsx', 'xls'}
 MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max file size
 
@@ -112,6 +112,8 @@ def clear_session_data(session_id):
     except Exception as e:
         print(f"❌ Error clearing session data: {e}")
         return False
+
+def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def parse_uploaded_file(file):
@@ -160,17 +162,18 @@ def index():
 @app.route('/upload', methods=['POST'])
 def upload_files():
     try:
-        print("Upload endpoint called")  # Debug log
+        print("=== UPLOAD ENDPOINT DEBUG (FILE-BASED) ===")
+        print(f"Upload endpoint called")
         
         # Check if files are present
         if 'meta_ads_file' not in request.files or 'sales_file' not in request.files:
-            print("Missing files in request")  # Debug log
+            print("Missing files in request")
             return jsonify({'error': 'Both META Ads and Sales files are required'}), 400
         
         meta_file = request.files['meta_ads_file']
         sales_file = request.files['sales_file']
         
-        print(f"Files received: {meta_file.filename}, {sales_file.filename}")  # Debug log
+        print(f"Files received: {meta_file.filename}, {sales_file.filename}")
         
         if meta_file.filename == '' or sales_file.filename == '':
             return jsonify({'error': 'Both files must be selected'}), 400
@@ -179,90 +182,114 @@ def upload_files():
             return jsonify({'error': 'Only CSV and Excel files are allowed'}), 400
         
         # Parse META Ads file
-        print("Parsing META Ads file...")  # Debug log
+        print("Parsing META Ads file...")
         meta_df, meta_error = parse_uploaded_file(meta_file)
         if meta_error:
-            print(f"META Ads parsing error: {meta_error}")  # Debug log
+            print(f"META Ads parsing error: {meta_error}")
             return jsonify({'error': f'META Ads file error: {meta_error}'}), 400
         
         # Parse Sales file
-        print("Parsing Sales file...")  # Debug log
+        print("Parsing Sales file...")
         sales_df, sales_error = parse_uploaded_file(sales_file)
         if sales_error:
-            print(f"Sales parsing error: {sales_error}")  # Debug log
+            print(f"Sales parsing error: {sales_error}")
             return jsonify({'error': f'Sales file error: {sales_error}'}), 400
         
-        print(f"Data shapes - META: {meta_df.shape}, Sales: {sales_df.shape}")  # Debug log
+        print(f"Data shapes - META: {meta_df.shape}, Sales: {sales_df.shape}")
         
         # Clean data and handle NaN values before storing
-        meta_df_clean = meta_df.fillna('')  # Replace NaN with empty strings
-        sales_df_clean = sales_df.fillna('')  # Replace NaN with empty strings
+        meta_df_clean = meta_df.fillna('')
+        sales_df_clean = sales_df.fillna('')
         
-        print("Data cleaned, converting to JSON...")  # Debug log
+        print("Data cleaned, converting to JSON...")
         
-        # Make session permanent to persist data
-        session.permanent = True
+        # Get session ID for file-based storage
+        session_id = get_session_id()
+        print(f"🆔 Generated Session ID: {session_id}")
+        print(f"📁 Session data folder exists: {os.path.exists(SESSION_DATA_FOLDER)}")
+        print(f"📁 Session data folder path: {os.path.abspath(SESSION_DATA_FOLDER)}")
         
-        # Store data in session (for MVP - in production, use a database)
-        session['meta_data'] = meta_df_clean.to_json(orient='records')
-        session['sales_data'] = sales_df_clean.to_json(orient='records')
-        session['meta_columns'] = list(meta_df.columns)
-        session['sales_columns'] = list(sales_df.columns)
-        session['upload_timestamp'] = datetime.now().isoformat()
+        # Store data in file instead of session cookie
+        session_data = {
+            'meta_data': meta_df_clean.to_json(orient='records'),
+            'sales_data': sales_df_clean.to_json(orient='records'),
+            'meta_columns': list(meta_df.columns),
+            'sales_columns': list(sales_df.columns),
+            'upload_timestamp': datetime.now().isoformat()
+        }
         
-        print("Data stored in session successfully")  # Debug log
-        print(f"Session keys after upload: {list(session.keys())}")  # Debug log
+        print(f"💾 Attempting to save data for session: {session_id}")
+        
+        if save_session_data(session_id, session_data):
+            print("✅ Data stored in FILE successfully (not session cookie)")
+            print(f"📊 META data length: {len(session_data['meta_data'])} chars")
+            print(f"💰 Sales data length: {len(session_data['sales_data'])} chars")
+            
+            # Verify the file was actually created
+            filepath = os.path.join(SESSION_DATA_FOLDER, f"{session_id}.pkl")
+            print(f"📄 File exists after save: {os.path.exists(filepath)}")
+            if os.path.exists(filepath):
+                print(f"📏 File size: {os.path.getsize(filepath)} bytes")
+        else:
+            return jsonify({'error': 'Failed to save session data'}), 500
         
         # Generate data summary for initial analysis
         meta_summary = {
             'rows': len(meta_df),
             'columns': len(meta_df.columns),
             'column_names': list(meta_df.columns),
-            'sample_data': meta_df_clean.head(3).to_dict('records')  # Use cleaned data
+            'sample_data': meta_df_clean.head(3).to_dict('records')
         }
         
         sales_summary = {
             'rows': len(sales_df),
             'columns': len(sales_df.columns),
             'column_names': list(sales_df.columns),
-            'sample_data': sales_df_clean.head(3).to_dict('records')  # Use cleaned data
+            'sample_data': sales_df_clean.head(3).to_dict('records')
         }
         
-        print("Returning success response")  # Debug log
+        print("🎉 Returning success response")
         
         return jsonify({
             'message': 'Files uploaded successfully',
             'meta_summary': meta_summary,
-            'sales_summary': sales_summary
+            'sales_summary': sales_summary,
+            'session_id': session_id  # Include session ID in response for debugging
         })
         
     except Exception as e:
-        print(f"Upload error: {str(e)}")  # Debug log
+        print(f"❌ Upload error: {str(e)}")
         import traceback
-        traceback.print_exc()  # Print full error trace
+        traceback.print_exc()
         return jsonify({'error': f'Upload failed: {str(e)}'}), 500
 
 @app.route('/ask', methods=['POST'])
 def ask_question():
     try:
-        print("=== ASK ENDPOINT DEBUG ===")
-        print(f"Ask endpoint called")
+        print("=== ASK ENDPOINT DEBUG (FILE-BASED) ===")
+        print(f"🔍 Ask endpoint called")
         
         # Get session ID and load data from file
         if 'session_id' not in session:
-            print("❌ No session ID found")
+            print("❌ No session ID found in session")
+            print(f"Session keys: {list(session.keys())}")
             return jsonify({'error': 'No session found. Please upload files first'}), 400
         
         session_id = session['session_id']
-        print(f"Session ID: {session_id}")
+        print(f"🆔 Session ID: {session_id}")
         
         # Load session data from file
+        print(f"📁 Loading data from file...")
         session_data = load_session_data(session_id)
         if not session_data:
-            print("❌ No session data found")
+            print("❌ No session data found in file")
+            filepath = os.path.join(SESSION_DATA_FOLDER, f"{session_id}.pkl")
+            print(f"Expected file path: {filepath}")
+            print(f"File exists: {os.path.exists(filepath)}")
             return jsonify({'error': 'Session data not found. Please upload files first'}), 400
         
-        print(f"Session data keys: {list(session_data.keys())}")
+        print(f"✅ Session data loaded successfully")
+        print(f"📊 Session data keys: {list(session_data.keys())}")
         
         # Check if Claude client is available
         if client is None:
@@ -271,7 +298,7 @@ def ask_question():
         data = request.get_json()
         question = data.get('question', '').strip()
         
-        print(f"Question received: {question}")
+        print(f"❓ Question received: {question}")
         
         if not question:
             return jsonify({'error': 'Question is required'}), 400
@@ -288,7 +315,7 @@ def ask_question():
         print("✅ Both datasets found in session data")
         
         # Reconstruct DataFrames from session data
-        print("Reconstructing DataFrames...")
+        print("🔄 Reconstructing DataFrames...")
         try:
             meta_df = pd.read_json(session_data['meta_data'], orient='records')
             sales_df = pd.read_json(session_data['sales_data'], orient='records')
@@ -326,7 +353,7 @@ Please provide a comprehensive analysis based on the question asked. When analyz
 
 Answer the question thoroughly and provide valuable business insights."""
         
-        print("Sending request to Claude API...")
+        print("🤖 Sending request to Claude API...")
         
         # Call Claude API with enhanced analysis capabilities
         message = client.messages.create(
@@ -365,34 +392,6 @@ Answer the question thoroughly and provide valuable business insights."""
         traceback.print_exc()
         return jsonify({'error': f'Analysis failed: {str(e)}'}), 500
 
-@app.route('/data-summary', methods=['GET'])
-def get_data_summary():
-    try:
-        if 'meta_data' not in session or 'sales_data' not in session:
-            return jsonify({'error': 'No data uploaded'}), 400
-        
-        # Reconstruct DataFrames
-        meta_df = pd.read_json(session['meta_data'], orient='records')
-        sales_df = pd.read_json(session['sales_data'], orient='records')
-        
-        summary = {
-            'meta_ads': {
-                'rows': len(meta_df),
-                'columns': list(meta_df.columns),
-                'data_types': meta_df.dtypes.astype(str).to_dict()
-            },
-            'sales': {
-                'rows': len(sales_df),
-                'columns': list(sales_df.columns),
-                'data_types': sales_df.dtypes.astype(str).to_dict()
-            }
-        }
-        
-        return jsonify(summary)
-        
-    except Exception as e:
-        return jsonify({'error': f'Failed to get summary: {str(e)}'}), 500
-
 @app.route('/detailed-analysis', methods=['POST'])
 def detailed_analysis():
     """Get detailed analysis of specific data subsets"""
@@ -400,12 +399,18 @@ def detailed_analysis():
         data = request.get_json()
         analysis_type = data.get('analysis_type', 'general')
         
-        if 'meta_data' not in session or 'sales_data' not in session:
+        if 'session_id' not in session:
+            return jsonify({'error': 'Please upload files first'}), 400
+        
+        session_id = session['session_id']
+        session_data = load_session_data(session_id)
+        
+        if not session_data or 'meta_data' not in session_data or 'sales_data' not in session_data:
             return jsonify({'error': 'Please upload files first'}), 400
         
         # Reconstruct DataFrames
-        meta_df = pd.read_json(session['meta_data'], orient='records')
-        sales_df = pd.read_json(session['sales_data'], orient='records')
+        meta_df = pd.read_json(session_data['meta_data'], orient='records')
+        sales_df = pd.read_json(session_data['sales_data'], orient='records')
         
         # Provide more detailed data context for specific analysis types
         if analysis_type == 'performance_summary':
@@ -447,7 +452,7 @@ def detailed_analysis():
         
         # Call Claude API
         message = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model="claude-3-5-sonnet-20241210",
             max_tokens=4000,
             temperature=0.1,
             messages=[
@@ -468,13 +473,143 @@ def detailed_analysis():
         
     except Exception as e:
         return jsonify({'error': f'Detailed analysis failed: {str(e)}'}), 500
+
+@app.route('/data-summary', methods=['GET'])
+def get_data_summary():
+    try:
+        if 'session_id' not in session:
+            return jsonify({'error': 'No data uploaded'}), 400
+        
+        session_id = session['session_id']
+        session_data = load_session_data(session_id)
+        
+        if not session_data or 'meta_data' not in session_data or 'sales_data' not in session_data:
+            return jsonify({'error': 'No data uploaded'}), 400
+        
+        # Reconstruct DataFrames
+        meta_df = pd.read_json(session_data['meta_data'], orient='records')
+        sales_df = pd.read_json(session_data['sales_data'], orient='records')
+        
+        summary = {
+            'meta_ads': {
+                'rows': len(meta_df),
+                'columns': list(meta_df.columns),
+                'data_types': meta_df.dtypes.astype(str).to_dict()
+            },
+            'sales': {
+                'rows': len(sales_df),
+                'columns': list(sales_df.columns),
+                'data_types': sales_df.dtypes.astype(str).to_dict()
+            }
+        }
+        
+        return jsonify(summary)
+        
+    except Exception as e:
+        return jsonify({'error': f'Failed to get summary: {str(e)}'}), 500
+
+@app.route('/session-status', methods=['GET'])
+def session_status():
+    """Check what's in the current session"""
+    if 'session_id' not in session:
+        return jsonify({
+            'has_session': False,
+            'message': 'No session found'
+        })
+    
+    session_id = session['session_id']
+    session_data = load_session_data(session_id)
+    
+    return jsonify({
+        'has_session': True,
+        'session_id': session_id,
+        'session_data_keys': list(session_data.keys()),
+        'has_meta_data': 'meta_data' in session_data,
+        'has_sales_data': 'sales_data' in session_data,
+        'meta_data_length': len(session_data.get('meta_data', '')) if 'meta_data' in session_data else 0,
+        'sales_data_length': len(session_data.get('sales_data', '')) if 'sales_data' in session_data else 0,
+        'upload_timestamp': session_data.get('upload_timestamp', 'Not found')
+    })
+
+@app.route('/clear-data', methods=['POST'])
 def clear_data():
     """Clear uploaded data from session"""
-    session.pop('meta_data', None)
-    session.pop('sales_data', None)
-    session.pop('meta_columns', None)
-    session.pop('sales_columns', None)
-    return jsonify({'message': 'Data cleared successfully'})
+    try:
+        if 'session_id' in session:
+            session_id = session['session_id']
+            clear_session_data(session_id)
+        
+        # Clear session
+        session.clear()
+        return jsonify({'message': 'Data cleared successfully'})
+    except Exception as e:
+        return jsonify({'error': f'Failed to clear data: {str(e)}'}), 500
+
+@app.route('/test-claude', methods=['GET'])
+def test_claude():
+    """Test endpoint to verify Claude API is working"""
+    try:
+        if client is None:
+            return jsonify({
+                'status': 'error',
+                'message': 'Claude client not initialized. Check ANTHROPIC_API_KEY in .env file'
+            }), 500
+        
+        # Simple test message
+        message = client.messages.create(
+            model="claude-3-5-sonnet-20241210",
+            max_tokens=50,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Hello! Please respond with 'API connection successful!' to confirm you're working."
+                }
+            ]
+        )
+        
+        response_text = message.content[0].text
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Claude API is working!',
+            'response': response_text
+        })
+        
+    except anthropic.APIConnectionError as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Connection error: {str(e)}',
+            'suggestion': 'Check your internet connection and firewall settings'
+        }), 500
+        
+    except anthropic.APIError as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'API error: {str(e)}',
+            'suggestion': 'Check your API key is valid and has proper permissions'
+        }), 500
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Unexpected error: {str(e)}'
+        }), 500
+
+@app.route('/debug-config', methods=['GET'])
+def debug_config():
+    """Debug endpoint to check configuration"""
+    api_key = os.getenv('ANTHROPIC_API_KEY')
+    
+    return jsonify({
+        'env_file_exists': os.path.exists('.env'),
+        'api_key_loaded': bool(api_key),
+        'api_key_format': api_key[:15] + '...' if api_key and len(api_key) > 15 else 'Not found',
+        'api_key_length': len(api_key) if api_key else 0,
+        'client_initialized': client is not None,
+        'working_directory': os.getcwd(),
+        'session_data_folder_exists': os.path.exists(SESSION_DATA_FOLDER),
+        'session_data_folder_path': os.path.abspath(SESSION_DATA_FOLDER)
+    })
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5001)
