@@ -3,6 +3,7 @@ from flask_cors import CORS
 import pandas as pd
 import json
 import os
+import numpy as np
 from datetime import datetime
 import anthropic
 from werkzeug.utils import secure_filename
@@ -52,7 +53,20 @@ def parse_uploaded_file(file):
             df = pd.read_excel(file)
         else:
             return None, "Unsupported file format"
-            
+        
+        # Clean the DataFrame
+        # Replace infinite values with NaN, then fill NaN with appropriate values
+        df = df.replace([np.inf, -np.inf], np.nan)
+        
+        # Convert numeric columns properly
+        for col in df.columns:
+            if df[col].dtype == 'object':
+                # Try to convert to numeric, if fails keep as string
+                try:
+                    df[col] = pd.to_numeric(df[col], errors='ignore')
+                except:
+                    pass
+        
         return df, None
     except Exception as e:
         return None, f"Error parsing file: {str(e)}"
@@ -64,12 +78,17 @@ def index():
 @app.route('/upload', methods=['POST'])
 def upload_files():
     try:
+        print("Upload endpoint called")  # Debug log
+        
         # Check if files are present
         if 'meta_ads_file' not in request.files or 'sales_file' not in request.files:
+            print("Missing files in request")  # Debug log
             return jsonify({'error': 'Both META Ads and Sales files are required'}), 400
         
         meta_file = request.files['meta_ads_file']
         sales_file = request.files['sales_file']
+        
+        print(f"Files received: {meta_file.filename}, {sales_file.filename}")  # Debug log
         
         if meta_file.filename == '' or sales_file.filename == '':
             return jsonify({'error': 'Both files must be selected'}), 400
@@ -78,35 +97,51 @@ def upload_files():
             return jsonify({'error': 'Only CSV and Excel files are allowed'}), 400
         
         # Parse META Ads file
+        print("Parsing META Ads file...")  # Debug log
         meta_df, meta_error = parse_uploaded_file(meta_file)
         if meta_error:
+            print(f"META Ads parsing error: {meta_error}")  # Debug log
             return jsonify({'error': f'META Ads file error: {meta_error}'}), 400
         
         # Parse Sales file
+        print("Parsing Sales file...")  # Debug log
         sales_df, sales_error = parse_uploaded_file(sales_file)
         if sales_error:
+            print(f"Sales parsing error: {sales_error}")  # Debug log
             return jsonify({'error': f'Sales file error: {sales_error}'}), 400
         
+        print(f"Data shapes - META: {meta_df.shape}, Sales: {sales_df.shape}")  # Debug log
+        
+        # Clean data and handle NaN values before storing
+        meta_df_clean = meta_df.fillna('')  # Replace NaN with empty strings
+        sales_df_clean = sales_df.fillna('')  # Replace NaN with empty strings
+        
+        print("Data cleaned, converting to JSON...")  # Debug log
+        
         # Store data in session (for MVP - in production, use a database)
-        session['meta_data'] = meta_df.to_json(orient='records')
-        session['sales_data'] = sales_df.to_json(orient='records')
+        session['meta_data'] = meta_df_clean.to_json(orient='records')
+        session['sales_data'] = sales_df_clean.to_json(orient='records')
         session['meta_columns'] = list(meta_df.columns)
         session['sales_columns'] = list(sales_df.columns)
+        
+        print("Data stored in session successfully")  # Debug log
         
         # Generate data summary for initial analysis
         meta_summary = {
             'rows': len(meta_df),
             'columns': len(meta_df.columns),
             'column_names': list(meta_df.columns),
-            'sample_data': meta_df.head(3).to_dict('records')
+            'sample_data': meta_df_clean.head(3).to_dict('records')  # Use cleaned data
         }
         
         sales_summary = {
             'rows': len(sales_df),
             'columns': len(sales_df.columns),
             'column_names': list(sales_df.columns),
-            'sample_data': sales_df.head(3).to_dict('records')
+            'sample_data': sales_df_clean.head(3).to_dict('records')  # Use cleaned data
         }
+        
+        print("Returning success response")  # Debug log
         
         return jsonify({
             'message': 'Files uploaded successfully',
@@ -115,6 +150,9 @@ def upload_files():
         })
         
     except Exception as e:
+        print(f"Upload error: {str(e)}")  # Debug log
+        import traceback
+        traceback.print_exc()  # Print full error trace
         return jsonify({'error': f'Upload failed: {str(e)}'}), 500
 
 @app.route('/ask', methods=['POST'])

@@ -471,12 +471,16 @@ Ask me anything else about your data - I can analyze patterns, calculate metrics
             uploadLoading.style.display = 'block';
 
             try {
+                console.log('Starting upload...'); // Debug log
                 const response = await fetch('/upload', {
                     method: 'POST',
                     body: formData
                 });
 
+                console.log('Response received:', response.status); // Debug log
+                
                 const data = await response.json();
+                console.log('Data parsed:', data); // Debug log
 
                 if (!response.ok) {
                     throw new Error(data.error || 'Upload failed');
@@ -488,6 +492,7 @@ Ask me anything else about your data - I can analyze patterns, calculate metrics
                 clearDataBtn.style.display = 'inline-block';
 
             } catch (error) {
+                console.error('Upload error:', error); // Debug log
                 showError(`Upload failed: ${error.message}`);
             } finally {
                 uploadBtn.disabled = false;
