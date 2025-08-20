@@ -357,7 +357,7 @@ Answer the question thoroughly and provide valuable business insights."""
         
         # Call Claude API with enhanced analysis capabilities
         message = client.messages.create(
-            model="claude-3-5-sonnet-20241210",
+            model="claude-3-5-sonnet-20241022",  # Use the correct model name
             max_tokens=4000,
             temperature=0.1,
             messages=[
@@ -452,7 +452,7 @@ def detailed_analysis():
         
         # Call Claude API
         message = client.messages.create(
-            model="claude-3-5-sonnet-20241210",
+            model="claude-3-5-sonnet-20241022",
             max_tokens=4000,
             temperature=0.1,
             messages=[
@@ -557,7 +557,7 @@ def test_claude():
         
         # Simple test message
         message = client.messages.create(
-            model="claude-3-5-sonnet-20241210",
+            model="claude-3-5-sonnet-20241022",
             max_tokens=50,
             messages=[
                 {
@@ -612,4 +612,4 @@ def debug_config():
     })
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    app.run(debug=True, host='0.0.0.0', port=5000)
