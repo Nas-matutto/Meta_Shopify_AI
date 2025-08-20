@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify, render_template, session
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONSfrom flask import Flask, request, jsonify, render_template, session
 from flask_cors import CORS
 import pandas as pd
 import json
@@ -9,6 +10,8 @@ import anthropic
 from werkzeug.utils import secure_filename
 import io
 from dotenv import load_dotenv
+import hashlib
+import pickle
 
 # Load environment variables
 load_dotenv()
@@ -20,14 +23,16 @@ CORS(app)
 
 # Configuration
 UPLOAD_FOLDER = 'uploads'
+SESSION_DATA_FOLDER = 'session_data'  # New folder for session data
 ALLOWED_EXTENSIONS = {'csv', 'xlsx', 'xls'}
 MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max file size
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 
-# Ensure upload directory exists
+# Ensure directories exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(SESSION_DATA_FOLDER, exist_ok=True)
 
 # Initialize Anthropic client with proper error handling
 try:
@@ -60,7 +65,53 @@ except Exception as e:
     print(f"Error initializing Anthropic client: {e}")
     client = None
 
-def allowed_file(filename):
+def get_session_id():
+    """Get or create a session ID"""
+    if 'session_id' not in session:
+        # Create a unique session ID
+        session['session_id'] = hashlib.md5(f"{datetime.now().isoformat()}{os.urandom(16)}".encode()).hexdigest()
+        session.permanent = True
+    return session['session_id']
+
+def save_session_data(session_id, data):
+    """Save data to file instead of session cookie"""
+    try:
+        filepath = os.path.join(SESSION_DATA_FOLDER, f"{session_id}.pkl")
+        with open(filepath, 'wb') as f:
+            pickle.dump(data, f)
+        print(f"✅ Data saved to file: {filepath}")
+        return True
+    except Exception as e:
+        print(f"❌ Error saving session data: {e}")
+        return False
+
+def load_session_data(session_id):
+    """Load data from file"""
+    try:
+        filepath = os.path.join(SESSION_DATA_FOLDER, f"{session_id}.pkl")
+        if os.path.exists(filepath):
+            with open(filepath, 'rb') as f:
+                data = pickle.load(f)
+            print(f"✅ Data loaded from file: {filepath}")
+            return data
+        else:
+            print(f"❌ Session file not found: {filepath}")
+            return {}
+    except Exception as e:
+        print(f"❌ Error loading session data: {e}")
+        return {}
+
+def clear_session_data(session_id):
+    """Clear session data file"""
+    try:
+        filepath = os.path.join(SESSION_DATA_FOLDER, f"{session_id}.pkl")
+        if os.path.exists(filepath):
+            os.remove(filepath)
+            print(f"✅ Session data file deleted: {filepath}")
+        return True
+    except Exception as e:
+        print(f"❌ Error clearing session data: {e}")
+        return False
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def parse_uploaded_file(file):
@@ -196,9 +247,22 @@ def ask_question():
     try:
         print("=== ASK ENDPOINT DEBUG ===")
         print(f"Ask endpoint called")
-        print(f"Session ID: {request.cookies.get('session', 'No session cookie')}")
-        print(f"All session keys: {list(session.keys())}")
-        print(f"Session items: {dict(session)}")
+        
+        # Get session ID and load data from file
+        if 'session_id' not in session:
+            print("❌ No session ID found")
+            return jsonify({'error': 'No session found. Please upload files first'}), 400
+        
+        session_id = session['session_id']
+        print(f"Session ID: {session_id}")
+        
+        # Load session data from file
+        session_data = load_session_data(session_id)
+        if not session_data:
+            print("❌ No session data found")
+            return jsonify({'error': 'Session data not found. Please upload files first'}), 400
+        
+        print(f"Session data keys: {list(session_data.keys())}")
         
         # Check if Claude client is available
         if client is None:
@@ -212,35 +276,22 @@ def ask_question():
         if not question:
             return jsonify({'error': 'Question is required'}), 400
         
-        # More detailed session checking
-        print(f"Checking for 'meta_data' in session...")
-        print(f"'meta_data' in session: {'meta_data' in session}")
-        if 'meta_data' in session:
-            print(f"meta_data length: {len(session['meta_data'])}")
-        
-        print(f"Checking for 'sales_data' in session...")
-        print(f"'sales_data' in session: {'sales_data' in session}")
-        if 'sales_data' in session:
-            print(f"sales_data length: {len(session['sales_data'])}")
-        
-        # Check if data exists in session with detailed logging
-        if 'meta_data' not in session:
-            print("❌ META data not found in session")
-            print(f"Available session keys: {list(session.keys())}")
+        # Check if data exists
+        if 'meta_data' not in session_data:
+            print("❌ META data not found in session data")
             return jsonify({'error': 'META Ads data not found. Please upload files first'}), 400
             
-        if 'sales_data' not in session:
-            print("❌ Sales data not found in session")
-            print(f"Available session keys: {list(session.keys())}")
+        if 'sales_data' not in session_data:
+            print("❌ Sales data not found in session data")
             return jsonify({'error': 'Sales data not found. Please upload files first'}), 400
         
-        print("✅ Both datasets found in session")
+        print("✅ Both datasets found in session data")
         
-        # Reconstruct DataFrames from session
+        # Reconstruct DataFrames from session data
         print("Reconstructing DataFrames...")
         try:
-            meta_df = pd.read_json(session['meta_data'], orient='records')
-            sales_df = pd.read_json(session['sales_data'], orient='records')
+            meta_df = pd.read_json(session_data['meta_data'], orient='records')
+            sales_df = pd.read_json(session_data['sales_data'], orient='records')
             print(f"✅ Data loaded successfully - META: {len(meta_df)} rows, Sales: {len(sales_df)} rows")
         except Exception as e:
             print(f"❌ Error reconstructing DataFrames: {e}")
@@ -425,7 +476,5 @@ def clear_data():
     session.pop('sales_columns', None)
     return jsonify({'message': 'Data cleared successfully'})
 
-if __name__ == "__main__":
-    import os
-    port = int(os.environ.get("FLASK_PORT", 5001))  # use 5001 instead of 5000
-    app.run(debug=True, port=port)
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)

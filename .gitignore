@@ -130,6 +130,7 @@ dmypy.json
 
 # Project specific
 uploads/
+session_data/
 *.csv
 *.xlsx
 *.xls
