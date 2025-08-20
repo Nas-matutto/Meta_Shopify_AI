@@ -194,7 +194,11 @@ def upload_files():
 @app.route('/ask', methods=['POST'])
 def ask_question():
     try:
-        print("Ask endpoint called")  # Debug log
+        print("=== ASK ENDPOINT DEBUG ===")
+        print(f"Ask endpoint called")
+        print(f"Session ID: {request.cookies.get('session', 'No session cookie')}")
+        print(f"All session keys: {list(session.keys())}")
+        print(f"Session items: {dict(session)}")
         
         # Check if Claude client is available
         if client is None:
@@ -203,29 +207,43 @@ def ask_question():
         data = request.get_json()
         question = data.get('question', '').strip()
         
-        print(f"Question received: {question}")  # Debug log
-        print(f"Session keys: {list(session.keys())}")  # Debug log - see what's in session
+        print(f"Question received: {question}")
         
         if not question:
             return jsonify({'error': 'Question is required'}), 400
         
+        # More detailed session checking
+        print(f"Checking for 'meta_data' in session...")
+        print(f"'meta_data' in session: {'meta_data' in session}")
+        if 'meta_data' in session:
+            print(f"meta_data length: {len(session['meta_data'])}")
+        
+        print(f"Checking for 'sales_data' in session...")
+        print(f"'sales_data' in session: {'sales_data' in session}")
+        if 'sales_data' in session:
+            print(f"sales_data length: {len(session['sales_data'])}")
+        
         # Check if data exists in session with detailed logging
         if 'meta_data' not in session:
-            print("META data not found in session")  # Debug log
+            print("❌ META data not found in session")
+            print(f"Available session keys: {list(session.keys())}")
             return jsonify({'error': 'META Ads data not found. Please upload files first'}), 400
             
         if 'sales_data' not in session:
-            print("Sales data not found in session")  # Debug log
+            print("❌ Sales data not found in session")
+            print(f"Available session keys: {list(session.keys())}")
             return jsonify({'error': 'Sales data not found. Please upload files first'}), 400
         
+        print("✅ Both datasets found in session")
+        
         # Reconstruct DataFrames from session
-        print("Reconstructing DataFrames...")  # Debug log
+        print("Reconstructing DataFrames...")
         try:
             meta_df = pd.read_json(session['meta_data'], orient='records')
             sales_df = pd.read_json(session['sales_data'], orient='records')
-            print(f"Data loaded successfully - META: {len(meta_df)} rows, Sales: {len(sales_df)} rows")  # Debug log
+            print(f"✅ Data loaded successfully - META: {len(meta_df)} rows, Sales: {len(sales_df)} rows")
         except Exception as e:
-            print(f"Error reconstructing DataFrames: {e}")  # Debug log
+            print(f"❌ Error reconstructing DataFrames: {e}")
             return jsonify({'error': 'Error reading uploaded data. Please re-upload your files.'}), 400
         
         # Prepare context for Claude (limit data size for API)
@@ -257,11 +275,11 @@ Please provide a comprehensive analysis based on the question asked. When analyz
 
 Answer the question thoroughly and provide valuable business insights."""
         
-        print("Sending request to Claude API...")  # Debug log
+        print("Sending request to Claude API...")
         
         # Call Claude API with enhanced analysis capabilities
         message = client.messages.create(
-            model="claude-3-5-sonnet-20241210",  # Latest non-deprecated model
+            model="claude-3-5-sonnet-20241210",
             max_tokens=4000,
             temperature=0.1,
             messages=[
@@ -272,7 +290,7 @@ Answer the question thoroughly and provide valuable business insights."""
             ]
         )
         
-        print("Claude API response received")  # Debug log
+        print("✅ Claude API response received")
         
         response_text = message.content[0].text
         
@@ -282,18 +300,18 @@ Answer the question thoroughly and provide valuable business insights."""
         })
         
     except anthropic.APIError as e:
-        print(f"Anthropic API Error: {e}")  # Debug log
+        print(f"Anthropic API Error: {e}")
         return jsonify({'error': f'Claude API Error: {str(e)}'}), 500
     except anthropic.APIConnectionError as e:
-        print(f"Anthropic Connection Error: {e}")  # Debug log
+        print(f"Anthropic Connection Error: {e}")
         return jsonify({'error': f'Connection to Claude API failed. Please check your internet connection and API key.'}), 500
     except anthropic.RateLimitError as e:
-        print(f"Anthropic Rate Limit Error: {e}")  # Debug log
+        print(f"Anthropic Rate Limit Error: {e}")
         return jsonify({'error': f'Rate limit exceeded. Please try again in a moment.'}), 429
     except Exception as e:
-        print(f"General error in ask_question: {str(e)}")  # Debug log
+        print(f"General error in ask_question: {str(e)}")
         import traceback
-        traceback.print_exc()  # Print full error trace
+        traceback.print_exc()
         return jsonify({'error': f'Analysis failed: {str(e)}'}), 500
 
 @app.route('/data-summary', methods=['GET'])
