@@ -8,9 +8,13 @@ from datetime import datetime
 import anthropic
 from werkzeug.utils import secure_filename
 import io
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = 'your-secret-key-change-this'  # Change this in production
+app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-change-this')  # Load from .env
 CORS(app)
 
 # Configuration
@@ -24,10 +28,24 @@ app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 # Ensure upload directory exists
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Initialize Anthropic client (you'll need to set your API key)
-client = anthropic.Anthropic(
-    api_key=os.getenv('ANTHROPIC_API_KEY', 'your-api-key-here')
-)
+# Initialize Anthropic client with proper error handling
+try:
+    api_key = os.getenv('ANTHROPIC_API_KEY')
+    if not api_key or api_key == 'your-api-key-here':
+        print("WARNING: ANTHROPIC_API_KEY not found in environment variables!")
+        print("Please set your API key in the .env file")
+        client = None
+    else:
+        # Add timeout and retry configuration
+        client = anthropic.Anthropic(
+            api_key=api_key,
+            timeout=60.0,  # 60 second timeout
+            max_retries=3   # Retry failed requests 3 times
+        )
+        print(f"Anthropic client initialized successfully with key: {api_key[:10]}...")
+except Exception as e:
+    print(f"Error initializing Anthropic client: {e}")
+    client = None
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -158,8 +176,16 @@ def upload_files():
 @app.route('/ask', methods=['POST'])
 def ask_question():
     try:
+        print("Ask endpoint called")  # Debug log
+        
+        # Check if Claude client is available
+        if client is None:
+            return jsonify({'error': 'Claude API not configured. Please check your ANTHROPIC_API_KEY in .env file'}), 500
+        
         data = request.get_json()
         question = data.get('question', '').strip()
+        
+        print(f"Question received: {question}")  # Debug log
         
         if not question:
             return jsonify({'error': 'Question is required'}), 400
@@ -169,39 +195,31 @@ def ask_question():
             return jsonify({'error': 'Please upload files first'}), 400
         
         # Reconstruct DataFrames from session
+        print("Reconstructing DataFrames...")  # Debug log
         meta_df = pd.read_json(session['meta_data'], orient='records')
         sales_df = pd.read_json(session['sales_data'], orient='records')
         
-        # Prepare context for Claude
-        context = f"""
-        I have two datasets to analyze:
+        print(f"Data loaded - META: {len(meta_df)} rows, Sales: {len(sales_df)} rows")  # Debug log
         
-        1. META Ads Data:
-        - {len(meta_df)} rows, {len(meta_df.columns)} columns
-        - Columns: {', '.join(meta_df.columns)}
-        - Sample data (first 3 rows): {meta_df.head(3).to_json(orient='records')}
+        # Prepare context for Claude (limit data size for API)
+        meta_sample = meta_df.head(5).to_dict('records') if len(meta_df) > 5 else meta_df.to_dict('records')
+        sales_sample = sales_df.head(5).to_dict('records') if len(sales_df) > 5 else sales_df.to_dict('records')
         
-        2. Sales Data:
-        - {len(sales_df)} rows, {len(sales_df.columns)} columns  
-        - Columns: {', '.join(sales_df.columns)}
-        - Sample data (first 3 rows): {sales_df.head(3).to_json(orient='records')}
-        
-        Question: {question}
-        
-        Please analyze this data and provide insights. If you need more specific data points or calculations, let me know what additional information would be helpful.
-        """
-        
-        # Call Claude API with enhanced analysis capabilities
-        message = client.messages.create(
-            model="claude-3-5-sonnet-20241022",  # Updated to latest model
-            max_tokens=4000,
-            temperature=0.1,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"""You are a data analyst expert specializing in META Ads and Sales performance analysis. 
+        context = f"""You are a data analyst expert specializing in META Ads and Sales performance analysis. 
 
-{context}
+I have two datasets to analyze:
+
+1. META Ads Data:
+- {len(meta_df)} rows, {len(meta_df.columns)} columns
+- Columns: {', '.join(meta_df.columns)}
+- Sample data (first 5 rows): {json.dumps(meta_sample, default=str)}
+
+2. Sales Data:
+- {len(sales_df)} rows, {len(sales_df.columns)} columns  
+- Columns: {', '.join(sales_df.columns)}
+- Sample data (first 5 rows): {json.dumps(sales_sample, default=str)}
+
+Question: {question}
 
 Please provide a comprehensive analysis based on the question asked. When analyzing:
 1. Look for patterns, correlations, and insights in the data
@@ -211,9 +229,23 @@ Please provide a comprehensive analysis based on the question asked. When analyz
 5. Format your response clearly with key insights highlighted
 
 Answer the question thoroughly and provide valuable business insights."""
+        
+        print("Sending request to Claude API...")  # Debug log
+        
+        # Call Claude API with enhanced analysis capabilities
+        message = client.messages.create(
+            model="claude-3-5-sonnet-20241210",  # Latest non-deprecated model
+            max_tokens=4000,
+            temperature=0.1,
+            messages=[
+                {
+                    "role": "user",
+                    "content": context
                 }
             ]
         )
+        
+        print("Claude API response received")  # Debug log
         
         response_text = message.content[0].text
         
@@ -222,7 +254,19 @@ Answer the question thoroughly and provide valuable business insights."""
             'timestamp': datetime.now().isoformat()
         })
         
+    except anthropic.APIError as e:
+        print(f"Anthropic API Error: {e}")  # Debug log
+        return jsonify({'error': f'Claude API Error: {str(e)}'}), 500
+    except anthropic.APIConnectionError as e:
+        print(f"Anthropic Connection Error: {e}")  # Debug log
+        return jsonify({'error': f'Connection to Claude API failed. Please check your internet connection and API key.'}), 500
+    except anthropic.RateLimitError as e:
+        print(f"Anthropic Rate Limit Error: {e}")  # Debug log
+        return jsonify({'error': f'Rate limit exceeded. Please try again in a moment.'}), 429
     except Exception as e:
+        print(f"General error in ask_question: {str(e)}")  # Debug log
+        import traceback
+        traceback.print_exc()  # Print full error trace
         return jsonify({'error': f'Analysis failed: {str(e)}'}), 500
 
 @app.route('/data-summary', methods=['GET'])
